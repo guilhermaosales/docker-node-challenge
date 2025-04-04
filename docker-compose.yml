@@ -1,0 +1,54 @@
+services:
+    app:
+        build:
+            context: ./node
+        container_name: app
+        ports:
+          - "3000:3000"
+        volumes:
+          - ./node:/usr/src/app
+        tty: true
+        depends_on:
+          db:
+            condition: service_healthy
+        networks: 
+          - node-network
+        environment:
+          - DB_HOST=app_db  # Use service name as host
+          - DB_PORT=3306
+    db:
+      image: mysql:5.7
+      environment: 
+        - MYSQL_DATABASE=nodedb
+        - MYSQL_ROOT_PASSWORD=root
+      command: 
+        --innodb-use-native-aio=0 
+      ports:
+        - "3306:3306"
+      volumes: 
+        - ./mysql5:/var/lib/mysql
+        - ./data/init.sql:/docker-entrypoint-initdb.d/init.sql
+      container_name: app_db
+      restart: always
+      healthcheck:
+        test: ["CMD-SHELL", "mysql -uroot -proot -e 'SELECT 1'"]
+        interval: 5s
+        timeout: 10s
+        retries: 10
+      tty: true
+      networks: 
+        - node-network
+
+    nginx:
+        restart: always
+        build:
+          context: ./nginx
+        ports:
+          - "8080:80"
+        depends_on:
+          - app
+        networks: 
+          - node-network
+networks: 
+  node-network:
+    driver: bridge
