@@ -3,7 +3,7 @@ const mysql = require('mysql')
 const app = express()
 const port = 3000
 
-const config = mysql.createPool({
+const pool = mysql.createPool({
     connectionLimit: 10,
     host: 'app_db',
     user: 'root',
@@ -11,59 +11,94 @@ const config = mysql.createPool({
     database: 'nodedb',
     waitForConnections: true,
     queueLimit: 0
-  });
+});
 
-const connection = mysql.createConnection(config)
-
-connection.connect((err, connection) => {
-    if (err) {
-      console.error('Error connecting to MySQL: ' + err.stack);
-      return;
-    }
-    console.log('Connected to MySQL as ID ' + connection.threadId);
-  });
-
-
-app.get('/', async(req, res) => {
-    try {
-        const personName = `Person_${Math.floor(Math.random() * 100)}`;
-        
-        const insertData = `INSERT INTO people(name) VALUES(?)`;
-        await new Promise((resolve, reject) => {
-            config.query(insertData, [personName], (err, result) => {
-                if (err) {
-                    console.error('Error executing query: ', err.stack);
-                    reject(err);
-                } else {
-                    resolve(result);
-                }
-            });
-        });
-
-        const fetchData = `SELECT * FROM people`;
-        config.query(fetchData, (err, results) => {
+async function initializeDatabase() {
+    return new Promise((resolve, reject) => {
+        pool.getConnection((err, connection) => {
             if (err) {
-                console.error('Error fetching data: ', err.stack);
-                return res.status(500).send('Error fetching data');
+                console.error('Database initialization failed:', err);
+                return reject(err);
             }
 
-            let response = '<h1>Full Cycle Rocks!</h1>';
-            response += '<h2>People List:</h2>';
-            response += '<ul>';
-            results.forEach(person => {
-                response += `<li>${person.name}</li>`;
+            // Verify the connection with a ping
+            connection.ping(err => {
+                if (err) {
+                    console.error('Database ping failed:', err);
+                    connection.release();
+                    return reject(err);
+                }
+
+                console.log(`Connected to MySQL as ID ${connection.threadId}`);
+                connection.release();
+                resolve();
             });
-            response += '</ul>';
-            
-            res.status(200).send(response);
         });
-    }
-    catch (err) {
-        console.error('Error in route: ', err);
-        res.status(500).send('Internal Server Error');
-    }
-})
+    });
+}
+
+// Add error handlers for the pool
+pool.on('error', (err) => {
+    console.error('MySQL pool error:', err);
+});
+
+initializeDatabase()
+    .then(() => console.log('Database connection verified'))
+    .catch(err => {
+        console.error('Database verification failed:', err);
+        process.exit(1);
+    });
+
+
+app.get('/', (req, res) => {
+    pool.getConnection((err, connection) => {
+        if (err) {
+            console.error('Connection error:', err);
+            return res.status(500).send('<h1>Database Connection Error</h1>');
+        }
+
+        const personName = `Person_${Math.floor(Math.random() * 1000)}`;
+
+        // First query: INSERT
+        connection.query(
+            'INSERT INTO people (name) VALUES (?)',
+            [personName],
+            (insertError) => {
+                if (insertError) {
+                    connection.release();
+                    console.error('Insert error:', insertError);
+                    return res.status(500).send('<h1>Insert Error</h1>');
+                }
+
+                // Second query: SELECT
+                connection.query(
+                    'SELECT * FROM people ORDER BY id DESC',
+                    (selectError, results) => {
+                        connection.release(); // Always release connection
+
+                        if (selectError) {
+                            console.error('Select error:', selectError);
+                            return res.status(500).send('<h1>Query Error</h1>');
+                        }
+
+                        // Build response
+                        const html = `
+                                <h1>Full Cycle Rocks!</h1>
+                                <ul>
+                                    ${results.map(row => `<li>${row.name}</li>`).join('')}
+                                </ul>
+                            `;
+                        res.send(html);
+                    }
+                );
+            }
+        );
+    });
+});
+
 
 app.listen(port, () => {
     console.log(`Listening on port ${port}`)
 })
+
+module.exports = pool
